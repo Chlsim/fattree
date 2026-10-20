@@ -14,3 +14,4 @@ AI assistant: Claude (Anthropic), via Claude Code. I reviewed, ran and understan
 | 2026-10-20 | Wrote the sweep, CSV output and plot | `experiment.py` |
 | 2026-10-20 | Drafted the README sections Inputs, How to Run, Failure Model, Analysis and Results; I reviewed the explanation | `README.md` |
 | 2026-10-20 | Added the theory lower bound (hypergeometric edge isolation) and the up-down routability metric with tests and a second plot; extended the README results | `experiment.py`, `fattree.py`, `test_fattree.py`, `README.md` |
+| 2026-10-20 | Made a class slide deck and a plain-language study guide (kept outside the repo) | — |
