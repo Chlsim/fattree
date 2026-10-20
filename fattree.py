@@ -72,27 +72,36 @@ def fail_links(G, pct, seed=0):
 
 
 def host_path_stats(G):
-    """Return (mean hops over connected host pairs, fraction of host pairs that are disconnected).
+    """Return (mean hops over connected host pairs, fraction disconnected, fraction with no up-down path).
 
     Host links never fail, so two hosts on the same edge switch are 2 hops apart, and any other pair
     is dist(edge_a, edge_b) + 2. One BFS per edge switch therefore covers all host pairs exactly.
+
+    Up-down path: the paper's routing only goes up then down (at most 6 hops host-to-host). In a fat-tree,
+    the only edge-to-edge paths of the healthy length (2 in a pod, 4 across pods) are up-down paths, so a
+    pair keeps an up-down path if and only if its shortest path still has the healthy length.
     """
     edges = [n for n, t in G.nodes(data="type") if t == "edge"]
     h = G.graph["k"] // 2  # hosts per edge switch
-    hops = connected = disconnected = 0
+    hops = connected = disconnected = no_updown = 0
     for i, a in enumerate(edges):
         same = h * (h - 1) // 2  # host pairs under switch a
         hops += 2 * same
         connected += same
         dist = nx.single_source_shortest_path_length(G, a)
         for b in edges[i + 1:]:
+            healthy = 2 if G.nodes[a]["pod"] == G.nodes[b]["pod"] else 4
             if b in dist:
                 hops += h * h * (dist[b] + 2)
                 connected += h * h
+                if dist[b] > healthy:
+                    no_updown += h * h
             else:
                 disconnected += h * h
+                no_updown += h * h
+    total = connected + disconnected
     mean = hops / connected if connected else float("nan")
-    return mean, disconnected / (connected + disconnected)
+    return mean, disconnected / total, no_updown / total
 
 
 def summary(G):
@@ -170,9 +179,10 @@ def main():
     print(f"  links : {s['links']}")
     print(f"  failed: {G.graph['failed']} of {len(switch_links(G)) + G.graph['failed']} switch links "
           f"({args.fail:g}%, seed {args.seed})")
-    mean, disc = host_path_stats(G)
+    mean, disc, no_ud = host_path_stats(G)
     print(f"  avg host-host path : {mean:.3f} hops (connected pairs)")
     print(f"  disconnected pairs : {disc:.2%}")
+    print(f"  no up-down path    : {no_ud:.2%}")
     if args.draw:
         draw(G, args.draw)
         print(f"  drawing saved to {args.draw}")
