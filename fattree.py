@@ -1,5 +1,6 @@
 """k-ary fat-tree generator, following Al-Fares et al., SIGCOMM 2008, Section 3."""
 import argparse
+import random
 
 import networkx as nx
 
@@ -47,6 +48,51 @@ def build_fat_tree(k):
                 G.add_edge(a, f"core_{j}_{i}")
 
     return G
+
+
+def switch_links(G):
+    """Return the links that may fail: those with no host endpoint (edge-agg and agg-core)."""
+    return [(u, v) for u, v in G.edges if G.nodes[u]["type"] != "host" and G.nodes[v]["type"] != "host"]
+
+
+def fail_links(G, pct, seed=0):
+    """Return a copy of G with exactly round(pct% of switch links) removed, chosen uniformly at random.
+
+    Host-edge links never fail, because a host has no backup link, so a failure there says nothing
+    about the topology.
+    """
+    if not 0 <= pct <= 100:
+        raise ValueError(f"pct must be in [0, 100], got {pct}")
+    candidates = switch_links(G)
+    n_fail = round(pct / 100 * len(candidates))
+    H = G.copy()
+    H.remove_edges_from(random.Random(seed).sample(candidates, n_fail))
+    H.graph["failed"] = n_fail
+    return H
+
+
+def host_path_stats(G):
+    """Return (mean hops over connected host pairs, fraction of host pairs that are disconnected).
+
+    Host links never fail, so two hosts on the same edge switch are 2 hops apart, and any other pair
+    is dist(edge_a, edge_b) + 2. One BFS per edge switch therefore covers all host pairs exactly.
+    """
+    edges = [n for n, t in G.nodes(data="type") if t == "edge"]
+    h = G.graph["k"] // 2  # hosts per edge switch
+    hops = connected = disconnected = 0
+    for i, a in enumerate(edges):
+        same = h * (h - 1) // 2  # host pairs under switch a
+        hops += 2 * same
+        connected += same
+        dist = nx.single_source_shortest_path_length(G, a)
+        for b in edges[i + 1:]:
+            if b in dist:
+                hops += h * h * (dist[b] + 2)
+                connected += h * h
+            else:
+                disconnected += h * h
+    mean = hops / connected if connected else float("nan")
+    return mean, disconnected / (connected + disconnected)
 
 
 def summary(G):
@@ -104,12 +150,17 @@ def draw(G, path):
 def main():
     parser = argparse.ArgumentParser(description="Generate a k-ary fat-tree (Al-Fares et al. 2008).")
     parser.add_argument("--k", type=int, required=True, help="switch port count, must be even")
+    parser.add_argument("--fail", type=float, default=0.0, metavar="PCT",
+                        help="percentage of switch-to-switch links to fail, 0-100 (default 0)")
+    parser.add_argument("--seed", type=int, default=0, help="random seed for link failures (default 0)")
     parser.add_argument("--draw", metavar="PATH", help="save a drawing of the topology to PATH (practical for k <= 6)")
     args = parser.parse_args()
     if args.k < 2 or args.k % 2:
         parser.error("--k must be an even integer >= 2")
+    if not 0 <= args.fail <= 100:
+        parser.error("--fail must be between 0 and 100")
 
-    G = build_fat_tree(args.k)
+    G = fail_links(build_fat_tree(args.k), args.fail, args.seed)
     s = summary(G)
     print(f"k = {args.k} fat-tree")
     print(f"  hosts : {s['host']}")
@@ -117,6 +168,11 @@ def main():
     print(f"  agg   : {s['agg']}")
     print(f"  core  : {s['core']}")
     print(f"  links : {s['links']}")
+    print(f"  failed: {G.graph['failed']} of {len(switch_links(G)) + G.graph['failed']} switch links "
+          f"({args.fail:g}%, seed {args.seed})")
+    mean, disc = host_path_stats(G)
+    print(f"  avg host-host path : {mean:.3f} hops (connected pairs)")
+    print(f"  disconnected pairs : {disc:.2%}")
     if args.draw:
         draw(G, args.draw)
         print(f"  drawing saved to {args.draw}")
