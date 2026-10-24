@@ -92,7 +92,7 @@ $$P(\text{pair cut}) \ge 2H(k/2) - H(k)$$
 
 ![path length vs failure](results/path_length_vs_failure.png)
 
-**Setup:** k = 4, 8, 16 (16 / 128 / 1,024 hosts), 0–80% failure in 5% steps, 30 seeds per point. Mean with 95% CI. Dashed lines are the lower bound above.
+**Setup:** k = 4, 8, 16 (16 / 128 / 1,024 hosts), 0–80% failure in 5% steps, 30 seeds per point. Mean with 95% CI (normal approx.). Dashed lines are the lower bound above. Data: `results/path_length_raw.csv` (per seed), `results/path_length_summary.csv` (aggregated).
 
 | Failure | k = 4: hops / disc. | k = 8 | k = 16 |
 |---|---|---|---|
