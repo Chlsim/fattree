@@ -1,75 +1,22 @@
-# Fat-Tree Topology Generator & Analysis
+# Fat-Tree Generator & Failure Analysis
 
-HW1, Communication Networks for Data Centers & AI (BGU, Sem A 2026–27).
+HW1, Communication Networks for Data Centers & AI (BGU, 2026–27)
 
-This repo generates the 3-tier k-ary fat-tree of Al-Fares et al. [1] as a `networkx` graph, validates it, injects random link failures, and measures how host-to-host path length degrades as failures increase.
+Builds the 3-tier k-ary fat-tree from Al-Fares et al. [1] as a `networkx` graph, knocks out a random share of its links, and measures what that does to host-to-host paths.
 
-## Topology
+## Quick start
 
-A k-ary fat-tree is built entirely from identical k-port switches:
-
-| Element | Count | Wiring |
-|---|---|---|
-| Pods | k | — |
-| Edge switches | k/2 per pod (k²/2 total) | k/2 ports down to hosts, k/2 up to every agg in the pod |
-| Aggregation switches | k/2 per pod (k²/2 total) | k/2 ports down to every edge in the pod, k/2 up to core |
-| Core switches | (k/2)² | one port to each of the k pods |
-| Hosts | k/2 per edge switch (k³/4 total) | one link to their edge switch |
-| Links | 3k³/4 | k³/4 per layer (host–edge, edge–agg, agg–core) |
-
-**Core wiring.** The core switches form a (k/2)×(k/2) grid. Aggregation switch *j* of every pod connects to all k/2 core switches in row *j*. As a result, each core switch has exactly one link into each pod, and every switch uses all k of its ports.
-
-**Nodes.** Each node has a readable name, a `type` (`host`/`edge`/`agg`/`core`), a `pod` (all nodes except core) and an `addr` holding the paper's address:
-
-| Node | Name | `addr` (paper) |
-|---|---|---|
-| Core (row j, column i) | `core_j_i` | `10.k.j+1.i+1` |
-| Agg *s* in pod *p* | `agg_p{p}_{s}` | `10.p.(k/2+s).1` |
-| Edge *s* in pod *p* | `edge_p{p}_{s}` | `10.p.s.1` |
-| Host *h* under edge *s*, pod *p* | `host_p{p}_{s}_{h}` | `10.p.s.(h+2)` |
-
-**k = 4 example** (16 hosts, 20 switches, 48 links):
-
-![k=4 fat-tree](results/fattree_k4.png)
-
-**Validation** (`test_fattree.py`, k = 4, 6, 8):
-- node counts match the formulas above
-- every switch has degree k and every host has degree 1
-- the link count is 3k³/4
-- the graph is connected
-- each core switch connects to every pod exactly once
-- odd or invalid k is rejected
-
-## Inputs
-
-| Parameter | Flag | Required | Description |
-|---|---|---|---|
-| Switch port count | `--k` | yes | Must be an even integer ≥ 2. It sets the whole topology scale: k³/4 hosts, 5k²/4 switches. |
-| Link-failure percentage | `--fail PCT` | no (default 0) | Percentage (0–100) of **switch-to-switch** links to fail. See [Failure Model](#failure-model). |
-| Random seed | `--seed N` | no (default 0) | Picks which links fail. The same seed always gives the same failures. |
-| Drawing output | `--draw PATH` | no | Saves a layered drawing of the topology. Practical for k ≤ 6. |
-
-The experiment's sweep parameters (k values, failure range, repetitions) are constants at the top of `experiment.py`.
-
-## How to Run
-
-Requires Python ≥ 3.10.
+Python ≥ 3.10.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
-```
 
-```bash
-python fattree.py --k 4                                  # topology summary
-python fattree.py --k 8 --fail 30 --seed 3               # with 30% link failures
-python fattree.py --k 4 --draw results/fattree_k4.png    # also save a drawing
-python experiment.py                                     # full sweep (~25 s): CSVs + plot in results/
-pytest -q                                                # run the validation tests
+python fattree.py --k 4                                # build and print a summary
+python fattree.py --k 8 --fail 30 --seed 3             # same, with 30% of switch links failed
+python fattree.py --k 4 --draw results/fattree_k4.png  # save a drawing
+python experiment.py                                   # full sweep (~25 s), CSVs + plots in results/
+pytest -q                                              # validation tests
 ```
-
-Example output:
 
 ```
 k = 8 fat-tree
@@ -83,52 +30,71 @@ k = 8 fat-tree
   disconnected pairs : 0.00%
 ```
 
-## Failure Model
+## Inputs
 
-- **Which links can fail:** only switch-to-switch links (edge–agg and agg–core), N = k³/2 of them. Host–edge links never fail. A host has a single link with no backup, so failing it only strands that host and says nothing about the topology's redundancy, which is what we want to measure.
-- **How failures are sampled:** for a failure percentage p, exactly round(p · N) links are removed, chosen uniformly at random without replacement. A fixed percentage therefore always means the same number of failed links, as the assignment's "percentage of link failures" implies. (The alternative, each link failing independently with probability p, would make the count vary between runs.)
-- **Reproducibility:** the sample comes from `random.Random(seed)`, so a given (k, p, seed) always produces the same failed graph.
-- Failed links are removed from a **copy** of the graph, so the original topology is never modified.
+| Flag | Default | Meaning |
+|---|---|---|
+| `--k` | required | Ports per switch. Even, ≥ 2. Sets the whole scale. |
+| `--fail PCT` | 0 | % of switch-to-switch links to fail (0–100). |
+| `--seed N` | 0 | Picks which links fail. Same seed, same failures. |
+| `--draw PATH` | – | Save a layered drawing. Readable up to k = 6. |
 
-## Analysis
+Sweep settings (k values, failure range, number of seeds) are constants at the top of `experiment.py`.
 
-**Question:** how does the fat-tree's path redundancy hold up as links fail, and how does that depend on scale (k)?
+## Topology
 
-**Metric: average host-to-host shortest-path length (hops)**, averaged over all host pairs that are still connected. Because the average is undefined for disconnected pairs, we also report the **fraction of host pairs that are disconnected**. Without that second number, a falling average could be mistaken for an improvement (see the results).
+Everything is built from identical k-port switches:
 
-**Computation:** host links never fail, so two hosts under the same edge switch are 2 hops apart, and any other pair is dist(edge switch a, edge switch b) + 2. One BFS per edge switch (k²/2 of them) therefore gives the **exact** average over **all** host pairs, without sampling. `test_fattree.py` checks this against a brute-force all-pairs computation on failed graphs.
+| | Count |
+|---|---|
+| Pods | k |
+| Edge / agg switches | k/2 each per pod |
+| Core switches | (k/2)² |
+| Hosts | k³/4 (k/2 per edge switch) |
+| Links | 3k³/4 (k³/4 per layer) |
 
-**Second metric: fraction of host pairs with no up-down path.** The paper's two-level routing only uses *up-down* paths: edge→agg→edge inside a pod, or edge→agg→core→agg→edge across pods, which is at most 6 hops host-to-host. In a fat-tree, the only edge-to-edge paths with the healthy length (2 hops inside a pod, 4 across pods) are exactly the up-down paths. Any longer path must go down and back up (a "valley"). So a pair keeps an up-down path **if and only if** its shortest path still has its healthy length, and the same BFS gives this metric for free. `test_fattree.py` cross-checks it against an explicit search that follows the wiring hop by hop.
+Core switches sit in a (k/2)×(k/2) grid. Agg switch *j* of every pod connects to the k/2 cores in row *j*, so each core has exactly one link into each pod and every switch uses all k ports.
 
-**Theory lower bound for disconnection.** A host pair is *certainly* disconnected if one of its edge switches has lost all k/2 uplinks. With exactly n of the N = k³/2 switch links failed, the probability that j specific links have all failed is
+Nodes have readable names (`host_p1_0_1`, `edge_p1_0`, `agg_p1_0`, `core_0_1`) plus `type`, `pod` and `addr` attributes. `addr` follows the paper's scheme: `10.pod.switch.id` for pod switches and hosts, `10.k.j.i` for cores (1-indexed grid position).
 
-  H(j) = ∏ᵢ₌₀^{j−1} (n − i)/(N − i) ≈ pʲ.
+![k=4 fat-tree](results/fattree_k4.png)
 
-Two different edge switches have disjoint uplinks, so by inclusion–exclusion
+`test_fattree.py` checks, for k = 4, 6, 8: node counts, switch degree = k, host degree = 1, 3k³/4 links, connectivity, one core link per pod, and that odd k is rejected.
 
-  P(pair cut off) = 2·H(k/2) − H(k).
+## Failure model
 
-Multiplying by the share of pairs on different edge switches gives the expected lower bound. `test_fattree.py` checks that the bound never exceeds the true disconnected fraction in any sample, and that the formula matches 3,000 Monte Carlo samples.
+- **What fails:** only switch-to-switch links (edge–agg, agg–core), k³/2 in total. Host links never fail. A host has one link and no backup, so failing it just strands that host and tells us nothing about the fabric's redundancy.
+- **How:** for p%, exactly round(p · k³/2) links are removed, uniformly at random. A given percentage always means the same number of failed links.
+- **Reproducible:** sampling uses `random.Random(seed)`, and failures are applied to a copy of the graph.
 
-**Validation of the metric at 0% failure:** a host's other hosts are h−1 at 2 hops (same edge), (h−1)·h at 4 hops (same pod) and (k−1)·h² at 6 hops (other pods), where h = k/2. The measured baselines match this formula exactly.
+## Metrics
+
+1. **Average host-to-host shortest path (hops)**, over pairs that are still connected. On its own this number lies at high failure rates (it drops when long pairs disconnect), so I always report it next to the **fraction of disconnected pairs**.
+2. **Fraction of pairs with no up-down path.** The paper's two-level routing only uses up-down paths (edge→agg→edge, or edge→agg→core→agg→edge), max 6 hops. In a fat-tree these are exactly the paths with the healthy length, so a pair has an up-down path iff its shortest path hasn't grown.
+
+**How it's computed.** Host links never fail, so a host pair's distance is 2 (same edge switch) or dist(edge_a, edge_b) + 2. One BFS per edge switch gives the exact value over all pairs, no sampling. Both metrics are cross-checked in the tests against brute force.
+
+**Sanity check at 0%.** With h = k/2, each host has h−1 neighbours at 2 hops, (h−1)h at 4 and (k−1)h² at 6:
+
+$$\bar{d}_0 = \frac{2(h-1) + 4(h-1)h + 6(k-1)h^2}{k^3/4 - 1}$$
+
+That gives 5.47, 5.72, 5.86 for k = 4, 8, 16, which is what the simulation measures.
+
+**Lower bound on disconnection.** A pair is certainly cut off if either edge switch loses all k/2 uplinks. With n of N = k³/2 links failed, the chance that j specific links all failed is $H(j)=\prod_{i=0}^{j-1}\frac{n-i}{N-i}\approx p^j$, so
+
+$$P(\text{pair cut}) \ge 2H(k/2) - H(k)$$
+
+(the two edge switches have disjoint uplinks). The tests check that the bound holds in every sample and matches Monte Carlo.
 
 ## Results
 
-### Path length and disconnection vs. link-failure percentage
+### 1. Path length and disconnection vs. failure %
 
 ![path length vs failure](results/path_length_vs_failure.png)
 
-**Setup:** `python experiment.py`
-- k = 4, 8, 16 (16, 128 and 1,024 hosts)
-- failure percentage of switch-to-switch links: 0–80% in 5% steps
-- 30 repetitions per point (seeds 0–29)
-- each point is the mean, with the shaded band showing the 95% confidence interval (normal approximation)
-- dashed lines (bottom panel): the theory lower bound from [Analysis](#analysis)
-- raw data: `results/path_length_raw.csv`; aggregated: `results/path_length_summary.csv`
+**Setup:** k = 4, 8, 16 (16 / 128 / 1,024 hosts), 0–80% failure in 5% steps, 30 seeds per point. Mean with 95% CI. Dashed lines are the lower bound above.
 
-**Observations:**
-
-| Failure | k = 4: avg hops / disconnected | k = 8 | k = 16 |
+| Failure | k = 4: hops / disc. | k = 8 | k = 16 |
 |---|---|---|---|
 | 0% | 5.47 / 0% | 5.72 / 0% | 5.86 / 0% |
 | 30% | 5.95 / 21% | 5.84 / 1.2% | 5.87 / 0% |
@@ -136,53 +102,40 @@ Multiplying by the share of pairs on different edge switches gives the expected 
 | 70% | 3.14 / 88% | 8.42 / 57% | 7.32 / 10% |
 | 80% | 2.20 / 92% | 6.04 / 91% | 9.01 / 33% |
 
-1. **Flat region.** At low failure rates, path length doesn't change. For k = 16 the curve stays flat up to about 30% failure.
-2. **Stretch region.** Next, paths get longer than the 6-hop maximum of a healthy fat-tree.
-3. **Collapse region.** Finally, the average *drops*, and the bottom panel shows why: most pairs are disconnected by then.
-4. **Effect of scale.** A larger k shifts all three regions to the right.
-5. **Theory vs. simulation.** For k = 8 and k = 16, the dashed lower bound lies almost exactly on the simulated curve (within the confidence band). For k = 4, the simulation pulls clearly above the bound once failure exceeds about 30%.
+**What happens.** Three phases, and a bigger k pushes all of them to the right:
 
-**Explanation:**
-- **Flat region:** two hosts in different pods have (k/2)² equal-length 6-hop paths (k/2 aggs × k/2 cores each). As long as at least one survives, the shortest-path length is unchanged. With 64 such paths for k = 16, a lot of failure is needed before every one is broken.
-- **Stretch region:** once all shortest paths between two edge switches are broken, the surviving route detours, for example by going down to another edge switch and back up. Each detour like that adds 2 hops, which is why averages climb above 6.
-- **Collapse region:** the average only covers *connected* pairs. Long-distance pairs disconnect first, so the survivors are mostly short pairs (2 hops, under the same edge switch), and the mean falls toward 2. This is a survivorship effect, not an improvement, which is why the disconnection panel is essential.
-- **Scale:** an edge switch is cut off from the rest of the network only when all k/2 of its uplinks fail, which happens with probability ≈ p^(k/2). At p = 50% that's 25% for k = 4 but 0.4% for k = 16. Bigger switches give every edge switch more independent uplinks.
-- **Theory vs. simulation:** where the curves coincide, losing an edge switch's uplinks is essentially the *only* way pairs get disconnected. Every other cut, such as a whole pod losing its core links (all k/2 aggs × k/2 core links), needs far more failures at once. For k = 4 those other cuts need only 4 links, so they happen often and push the simulation above the bound. (At individual points the 30-sample mean can dip slightly below the bound. That's sampling noise: the bound holds exactly in every single sample, as the tests verify.)
+- **Flat.** A cross-pod pair has (k/2)² equal 6-hop paths. As long as one survives, nothing changes. For k = 16 (64 paths) the curve stays flat up to ~30%.
+- **Stretch.** Once every shortest path between two edge switches is broken, traffic detours down to another edge switch and back up, +2 hops each time. Averages go above 6.
+- **Collapse.** The average drops toward 2. That's survivorship, not recovery: long pairs disconnect first and only short ones are left in the average.
 
-**Significance:**
-- **The fat-tree degrades gracefully.** Its many equal-cost paths absorb a large fraction of random link failures with no change in path length. For k = 16, 30% of switch links can fail with essentially no effect.
-- **Scale buys robustness.** Robustness improves with k at no extra cost per switch, since the same commodity switches are used. This supports the paper's argument for building large networks from commodity switches.
-- **Path stretch is an early warning.** It appears before disconnection, so an operator can see the redundancy running out before hosts lose reachability.
-- **Limitation: shortest-path routing is optimistic.** Shortest paths may use detours that the paper's routing never takes. The next plot measures how big that gap is.
+**Why k matters.** An edge switch is cut off only when all k/2 uplinks fail, ≈ p^(k/2). At 50% that's 25% for k = 4 and 0.4% for k = 16. For k = 8 and 16 the bound sits right on the simulated curve, so isolated edge switches are basically the only way pairs get cut. For k = 4 other cuts are cheap (a pod loses its 4 core links), so the simulation sits above the bound.
 
-### Up-down routability vs. link-failure percentage
+**Takeaway.** The fat-tree degrades gracefully, and robustness grows with k using the same commodity switches, which is the paper's argument. Path stretch shows up before disconnection, so it works as an early warning.
+
+### 2. Up-down routability vs. failure %
 
 ![up-down vs failure](results/updown_vs_failure.png)
 
-**Setup:** the same run as above (`python experiment.py`: k = 4, 8, 16; 0–80% in 5% steps; 30 seeds; mean ± 95% CI). For each k, the solid line is the fraction of host pairs with **no up-down path**, meaning pairs the paper's two-level routing cannot serve. The dashed line is the fraction that is **physically disconnected**. The shaded gap between them is pairs that are still connected, but only through detours.
+**Setup:** same run. Solid line: pairs with no up-down path (the paper's routing can't serve them). Dashed: pairs physically disconnected. The gap is pairs that are reachable only through detours.
 
-**Observations:**
-
-| Failure | k = 4: no up-down / disconnected | k = 8 | k = 16 |
+| Failure | k = 4: no up-down / disc. | k = 8 | k = 16 |
 |---|---|---|---|
 | 30% | 39% / 21% | 7.3% / 1.2% | 0.4% / 0% |
 | 50% | 71% / 64% | 44% / 11% | 12% / 0.8% |
 | 70% | 88% / 88% | 86% / 57% | 66% / 10% |
 
-- The solid curve always lies above the dashed one, and it rises much earlier.
-- For k = 16 at 70% failure, only 10% of pairs are disconnected, but 66% have lost every up-down path.
-- For k = 4 the two curves nearly coincide, because a small fat-tree has few detours to offer.
+**What happens.** Up-down paths die much earlier than connectivity. At k = 16 and 70% failure, only 10% of pairs are disconnected but 66% have lost every up-down path. For k = 4 the curves almost overlap because there are few detours to begin with.
 
-**Explanation:** an up-down path between pods needs four specific links to all survive: edge→agg *j*, agg *j*→core, core→agg *j*, and agg *j*→edge. A cross-pod pair has (k/2)² such paths. A detour can mix links from many different paths, so it survives long after every one of the (k/2)² "clean" paths has lost at least one link. A larger k gives more detour options, which is why the gap grows with k.
+**Why.** A cross-pod up-down path needs 4 specific links alive, and there are (k/2)² of them. A detour can stitch together links from different paths, so it survives long after each clean path has lost a link. More ports means more ways to stitch, so the gap grows with k.
 
-**Significance:** the physical network is much more robust than the paper's routing can use. The paper's failure-broadcast scheme (§3.8 of [1]) reroutes around failed links, but it still only chooses among up-down paths. The solid curve is therefore the *best case* for the paper's routing: pairs above it are unreachable even with perfect failure knowledge. Recovering them requires routing that allows detours, such as F10 [2]. The lesson: "the graph is connected" is not the same as "the network can deliver packets".
+**Takeaway.** The physical network is far more robust than the paper's routing can use. Its failure broadcast (§3.8 of [1]) still only picks among up-down paths, so the solid line is the best case for that scheme. Getting the rest back needs routing that allows detours, like F10 [2]. A connected graph doesn't mean the network can deliver.
 
-## AI Usage
+## AI usage
 
 See [AI_USAGE.md](AI_USAGE.md).
 
 ## References
 
-[1] M. Al-Fares, A. Loukissas, and A. Vahdat, "A scalable, commodity data center network architecture," *SIGCOMM Comput. Commun. Rev.*, vol. 38, no. 4, pp. 63–74, Oct. 2008, doi: 10.1145/1402946.1402967.
+[1] M. Al-Fares, A. Loukissas, A. Vahdat, "A scalable, commodity data center network architecture," *SIGCOMM CCR*, vol. 38, no. 4, pp. 63–74, 2008. doi: 10.1145/1402946.1402967
 
-[2] V. Liu, D. Halperin, A. Krishnamurthy, and T. Anderson, "F10: A fault-tolerant engineered network," in *Proc. USENIX NSDI*, 2013.
+[2] V. Liu, D. Halperin, A. Krishnamurthy, T. Anderson, "F10: A fault-tolerant engineered network," *USENIX NSDI*, 2013.
